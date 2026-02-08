@@ -1,0 +1,143 @@
+# -----------------------------
+# Advanced Time Series Forecasting
+# Tasks 1–4: Synthetic Data, LSTM, SHAP, SARIMAX
+# -----------------------------
+
+# Task 1: Generate Synthetic Multivariate Time Series
+import numpy as np
+import pandas as pd
+from scipy.signal import sawtooth
+import matplotlib.pyplot as plt
+
+def generate_multivariate_series(n_steps=2000, seed=42):
+    np.random.seed(seed)
+    time = np.arange(n_steps)
+
+    # Long-term trend
+    trend = 0.005 * time
+
+    # Seasonality
+    seasonal_1 = 10 * np.sin(2 * np.pi * time / 50)
+    seasonal_2 = 5 * np.sin(2 * np.pi * time / 200)
+
+    # Noise
+    noise_1 = np.random.normal(0, 1.5, n_steps)
+    noise_2 = np.random.normal(0, 1.0, n_steps)
+    noise_3 = np.random.normal(0, 0.8, n_steps)
+
+    # Feature 1
+    x1 = trend + seasonal_1 + seasonal_2 + noise_1
+
+    # Feature 2 (dependent on x1)
+    x2 = 0.6 * x1 + 8 * sawtooth(2 * np.pi * time / 100) + noise_2
+
+    # Feature 3 (lagged interaction)
+    x1_lag = np.roll(x1, 3)
+    x2_lag = np.roll(x2, 5)
+    x3 = 0.4 * x1_lag + 0.4 * x2_lag + noise_3
+
+    df = pd.DataFrame({
+        "feature_1": x1,
+        "feature_2": x2,
+        "feature_3": x3
+    })
+    return df
+
+# Generate data
+df = generate_multivariate_series()
+df.plot(subplots=True, figsize=(12, 8), title="Synthetic Multivariate Time Series")
+plt.show()
+
+# -----------------------------
+# Task 2: LSTM Forecast Model
+# -----------------------------
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
+
+# Scale data
+scaler = MinMaxScaler()
+data_scaled = scaler.fit_transform(df)
+
+# Prepare sequences
+def create_sequences(data, seq_length=10):
+    X, y = [], []
+    for i in range(len(data)-seq_length):
+        X.append(data[i:i+seq_length])
+        y.append(data[i+seq_length])
+    return np.array(X), np.array(y)
+
+seq_length = 10
+X, y = create_sequences(data_scaled, seq_length)
+
+# Split into train/test
+train_size = int(len(X)*0.8)
+X_train, X_test = X[:train_size], X[train_size:]
+y_train, y_test = y[:train_size], y[train_size:]
+
+# Build LSTM model
+model = Sequential()
+model.add(LSTM(50, activation='relu', input_shape=(seq_length, 3)))
+model.add(Dense(3))
+model.compile(optimizer='adam', loss='mse')
+
+# Train model
+model.fit(X_train, y_train, epochs=10, batch_size=32, verbose=1)
+
+# Predictions
+y_pred = model.predict(X_test)
+
+# Inverse scale
+y_test_inv = scaler.inverse_transform(y_test)
+y_pred_inv = scaler.inverse_transform(y_pred)
+
+# Plot example predictions
+plt.figure(figsize=(12,6))
+plt.plot(y_test_inv[:,0], label='True feature_1')
+plt.plot(y_pred_inv[:,0], label='Predicted feature_1')
+plt.legend()
+plt.title("LSTM Forecast: Feature 1")
+plt.show()
+
+# -----------------------------
+# Task 3: Explainable AI (SHAP)
+# -----------------------------
+import shap
+
+# Use a small sample for SHAP to avoid long runtime
+background = X_train[np.random.choice(X_train.shape[0], 100, replace=False)]
+test_samples = X_test[:10]
+
+# Define a prediction function for SHAP
+def model_predict(X):
+    return model.predict(X)
+
+# KernelExplainer (slower but works for any model)
+explainer = shap.KernelExplainer(model_predict, background)
+shap_values = explainer.shap_values(test_samples)
+
+# Plot SHAP summary for feature_1
+shap.summary_plot(shap_values, test_samples, feature_names=df.columns)
+
+# -----------------------------
+# Task 4: Baseline SARIMAX Comparison
+# -----------------------------
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+# Fit SARIMAX for feature_1
+train_series = df['feature_1'][:train_size+seq_length]
+test_series = df['feature_1'][train_size+seq_length:]
+
+sarima_model = SARIMAX(train_series, order=(1,1,1), seasonal_order=(1,1,1,50))
+sarima_fit = sarima_model.fit(disp=False)
+
+# Forecast
+sarima_pred = sarima_fit.forecast(len(test_series))
+
+# Plot SARIMAX vs True
+plt.figure(figsize=(12,6))
+plt.plot(test_series.values, label='True feature_1')
+plt.plot(sarima_pred.values, label='SARIMAX feature_1')
+plt.legend()
+plt.title("SARIMAX Baseline Forecast")
+plt.show()
